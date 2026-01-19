@@ -1,0 +1,83 @@
+server:
+  port: 8081 # Public gateway port
+spring:
+  application:
+    name: api-gateway
+  # ---------------------------
+  # JWT VALIDATION (Keycloak)
+  # ---------------------------
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://keycloak:8080/realms/event-service
+  # ---------------------------
+  # REDIS (Rate Limiting)
+  # ---------------------------
+  data:
+    redis:
+      host: redis
+      port: 6381
+  # ---------------------------
+  # SPRING CLOUD GATEWAY
+  # ---------------------------
+  cloud:
+    gateway:
+      # Global filters (apply to ALL routes)
+      default-filters:
+        # Forward JWT to downstream services
+        - TokenRelay
+        # Rate limit all incoming traffic
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: 5
+            redis-rate-limiter.burstCapacity: 20
+      routes:
+        # --------------------------------------
+        # COMMAND SIDE (WRITE)
+        # Goes through orchestrator
+        # --------------------------------------
+        - id: event-commands
+          uri: http://orchestrator-service:8080
+          predicates:
+            - Path-/events/**
+            - Method-POST,PUT,DELETE,PATCH
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: orchestratorCB
+                fallbackUri: forward:/fallback/orchestrator
+        - id: ticket-commands
+          uri: http://orchestrator-service:8080
+          predicates:
+            - Path-/tickets/**
+            - Method-POST,PUT,DELETE,PATCH
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: orchestratorCB
+                fallbackUri: forward:/fallback/orchestrator
+        # --------------------------------------
+        # QUERY SIDE (READ)
+        # Goes directly to services
+        # --------------------------------------
+        - id: event-queries
+          uri: http://event-service:8080
+          predicates:
+            - Path-/events/**
+            - Method-GET
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: eventServiceCB
+                fallbackUri: forward:/fallback/events
+        - id: ticket-queries
+          uri: http://ticket-service:8080
+          predicates:
+            - Path-/tickets/**
+            - Method-GET
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: ticketServiceCB
+                fallbackUri: forward:/fallback/tickets
